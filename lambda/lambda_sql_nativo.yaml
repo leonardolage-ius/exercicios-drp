@@ -1,0 +1,110 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  PG 13/03 - Lambda dos exercicios de recuperacao: backup/restore nativo do RDS for SQL Server na
+  instancia temporaria do exercicio (Marco 2). Implantar uma vez em cada conta (CAL, Onegreen, Portal).
+
+Parameters:
+  NomeFuncao:
+    Type: String
+    Default: ius-lmb-exr-sql
+  NomePapel:
+    Type: String
+    Default: ius-rol-exr-lmb
+  NomeGrupoSeguranca:
+    Type: String
+    Default: ius-sgr-exr-lmb
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC da sub-rede de teste
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Sub-redes do subnet group de teste (servico.teste.db_subnet_group)
+  SgTesteId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Grupo de seguranca das instancias temporarias (servico.teste.security_group_ids)
+  BucketCodigo:
+    Type: String
+    Description: Bucket S3 onde foi enviado o pacote ius-lmb-exr-sql.zip
+  ChaveCodigo:
+    Type: String
+    Default: lambda/ius-lmb-exr-sql.zip
+  PrefixoTemporaria:
+    Type: String
+    Default: ius-rds-exr
+  RetencaoLogsDias:
+    Type: Number
+    Default: 90
+
+Resources:
+  Papel:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref NomePapel
+      Description: Lambda dos exercicios de recuperacao (PG 13/03) - somente logs e interfaces de rede na VPC
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+
+  GrupoSeguranca:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Ref NomeGrupoSeguranca
+      GroupDescription: Lambda PG 13/03 - saida somente para o SG de teste na porta 1433
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 1433
+          ToPort: 1433
+          DestinationSecurityGroupId: !Ref SgTesteId
+          Description: SQL Server das instancias temporarias do exercicio
+      Tags:
+        - {Key: Name, Value: !Ref NomeGrupoSeguranca}
+
+  EntradaNoSgTeste:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref SgTesteId
+      IpProtocol: tcp
+      FromPort: 1433
+      ToPort: 1433
+      SourceSecurityGroupId: !Ref GrupoSeguranca
+      Description: Lambda dos exercicios de recuperacao (PG 13/03)
+
+  Logs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${NomeFuncao}
+      RetentionInDays: !Ref RetencaoLogsDias
+
+  Funcao:
+    Type: AWS::Lambda::Function
+    DependsOn: Logs
+    Properties:
+      FunctionName: !Ref NomeFuncao
+      Description: PG 13/03 - restore/backup nativo na instancia temporaria do exercicio (Marco 2)
+      Runtime: python3.12
+      Architectures: [x86_64]
+      Handler: handler.lambda_handler
+      Code:
+        S3Bucket: !Ref BucketCodigo
+        S3Key: !Ref ChaveCodigo
+      Role: !GetAtt Papel.Arn
+      Timeout: 120
+      MemorySize: 256
+      Environment:
+        Variables:
+          PREFIXO: !Ref PrefixoTemporaria
+      VpcConfig:
+        SubnetIds: !Ref SubnetIds
+        SecurityGroupIds: [!Ref GrupoSeguranca]
+
+Outputs:
+  FuncaoArn:
+    Value: !GetAtt Funcao.Arn
+  GrupoSegurancaLambda:
+    Value: !Ref GrupoSeguranca

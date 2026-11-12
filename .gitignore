@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Configuração real de cada sistema (contém conta, perfil, ARNs etc.); versionar só os *.exemplo.yaml
+config_*.yaml
+!config_*.exemplo.yaml
+
+# Evidências e registros gerados pelos exercícios
+evidencias/
+
+# Pacote da Lambda gerado por lambda/empacotar.py
+lambda/*.zip
+
+# Sistema / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

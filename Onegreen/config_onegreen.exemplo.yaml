@@ -1,0 +1,51 @@
+# Configuração dos exercícios de recuperação do Onegreen — PG 13/03, seção 8
+# Copie para config_onegreen.yaml (nesta pasta) e substitua os valores marcados com <...>.
+# Metas copiadas do PG 13/13 (PCN), seção 7, janela comercial — em caso de divergência, prevalece o PCN.
+
+exercicio: E2
+regiao: us-east-1
+pasta_evidencias: evidencias          # relativa a esta pasta; copiar depois para Evidências ITs PGs > PG 13_03 > Exercícios de Recuperação
+prefixo_temporaria: ius-rds-exr       # temporárias: ius-rds-exr-e2a-ddmmaaaa (só esse prefixo pode ser excluído)
+intervalo_consulta_seg: 30
+tempo_maximo_espera_min: 240
+identificadores_protegidos: []        # além das três instâncias de produção, que já são protegidas
+
+servico:
+  nome: Onegreen
+  perfil: <perfil-aws-onegreen>
+  conta_id: "<000000000000>"
+  responsavel: {titular: Leonardo Lage, substituto: Eduardo César}
+  instancia_producao: medium-onegreen-rds
+  cofre_primario: <nome-do-cofre-primario-onegreen>
+  tipo_frente_b: cliente
+  teste:
+    db_subnet_group: <subnet-group-privado-de-teste>
+    security_group_ids: [<sg-sem-entrada-da-internet>]
+    kms_key_id: arn:aws:kms:us-east-1:<000000000000>:key/<id>   # chave da conta para instâncias criadas do zero
+    classe_instancia: null            # null = mesma classe da produção (cronometragem realista)
+    option_group: null                # null = mesmo grupo da produção  (já tem SQLSERVER_BACKUP_RESTORE)
+    parameter_group: null
+    usuario_mestre: null              # null = mesmo nome da produção; senha gerenciada pelo Secrets Manager
+    retencao_backup_dias: 0           # temporárias sem backup automático
+    lambda_sql: null                  # Marco 2 automático (Frente B): nome da Lambda após implantar lambda/; null = manual (SSMS)
+  exportacao:                         # destino do backup nativo do banco do cliente (item 7.7)
+    bucket: <bucket-acessivel-pelo-papel-do-grupo-de-opcoes>
+    prefixo: exercicios-prd/          # prefixo SEM retenção Object Lock: o arquivo é excluído ao final (LGPD)
+  integridade:
+    banco: <BANCO_DE_REFERENCIA>       # Frentes A e C; na Frente B vale o banco do cliente
+    tabelas: [<dbo.TabelaReferencia1>, <dbo.TabelaReferencia2>, <dbo.TabelaReferencia3>]
+    consulta_funcional: "SELECT TOP 10 * FROM <dbo.Tabela> ORDER BY <coluna_data> DESC;"
+  metas:
+    A: {rto_min: 120, rpo_min: 5}
+    B: {rto_min: 180, rpo_min: 5}
+    C: {rto_min: 120, rpo_min: 1440}
+  custo_hora_usd: null                # preço/hora da classe usada (us-east-1), para estimar o custo
+
+# Conta de backup isolada (PG 13/09) — só para a Frente C, executada pelo Custodiante da Conta de Backup.
+conta_backup:
+  perfil: <perfil-aws-conta-backup>
+  conta_id: "<000000000000>"
+  cofre: <nome-do-cofre-isolado>
+  papel_copia_arn: arn:aws:iam::<000000000000>:role/<papel-de-copia-do-aws-backup>
+  custodiante: Leonardo Lage
+  ciclo_vida_copia_dias: null         # opcional; respeite o mínimo do Vault Lock do cofre primário
