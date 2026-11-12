@@ -86,6 +86,11 @@ def exigir_conta_backup(cfg: dict) -> dict:
     return cb
 
 
+def regiao_conta_backup(cfg: dict) -> str:
+    """Região do cofre isolado (pode diferir da região do sistema, ex.: Portal em us-east-2, cofre em us-east-1)."""
+    return (cfg.get("conta_backup") or {}).get("regiao") or cfg["regiao"]
+
+
 def resolver_prefixo(prefixo: str | None, data) -> str:
     """Prefixo do .bak com variáveis da data do arquivo procurado: {ano}, {mes}, {dia}.
 

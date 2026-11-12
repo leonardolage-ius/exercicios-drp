@@ -12,7 +12,7 @@ from pathlib import Path
 from botocore.exceptions import ClientError, ProfileNotFound
 
 from . import aws, tempo
-from .config import prefixos_do_dia
+from .config import prefixos_do_dia, regiao_conta_backup
 from .contexto import Abortado
 
 
@@ -65,20 +65,31 @@ def _verificar_lambda(L: Lista, sess, t: dict, prod: dict | None) -> None:
         L.falha("Lambda na VPC", "função sem VpcConfig — não alcança a sub-rede de teste")
         return
     teste = set(t["security_group_ids"])
-    problemas = []
+    problemas, saida_para = [], set()
     for sg in ec2.describe_security_groups(GroupIds=sgs_lambda)["SecurityGroups"]:
         for regra in sg.get("IpPermissionsEgress", []):
             destinos = {g["GroupId"] for g in regra.get("UserIdGroupPairs", [])}
+            saida_para |= destinos
             abertos = regra.get("IpRanges") or regra.get("Ipv6Ranges") or regra.get("PrefixListIds")
             if abertos or regra.get("IpProtocol") == "-1" or regra.get("FromPort") != 1433 or not destinos <= teste:
                 problemas.append(f"{sg['GroupId']} tem saída além de TCP 1433 para o SG de teste")
-    (L.falha if problemas else L.ok)("Saída da Lambda restrita ao SG de teste (1433)", "; ".join(problemas))
-    entrada = False
+    if not saida_para & teste:
+        problemas.append(f"nenhuma saída 1433 para o SG de teste {', '.join(sorted(teste))} "
+                         f"(saída hoje para: {', '.join(sorted(saida_para)) or 'nenhum SG'}) — atualizar a pilha com SgTesteId")
+    (L.falha if problemas else L.ok)("Saída da Lambda restrita ao SG de teste (1433)",
+                                     "; ".join(problemas) or f"SG da Lambda {', '.join(sgs_lambda)} → {', '.join(sorted(saida_para))}")
+    entrada, origens = False, set()
     for sg in ec2.describe_security_groups(GroupIds=list(teste))["SecurityGroups"]:
         for regra in sg.get("IpPermissions", []):
-            if {g["GroupId"] for g in regra.get("UserIdGroupPairs", [])} & set(sgs_lambda):
+            grupos = {g["GroupId"] for g in regra.get("UserIdGroupPairs", [])}
+            origens |= grupos
+            if grupos & set(sgs_lambda) and regra.get("FromPort") in (1433, None) and regra.get("IpProtocol") in ("tcp", "-1"):
                 entrada = True
-    (L.ok if entrada else L.falha)("SG de teste aceita a Lambda na porta 1433")
+    (L.ok if entrada else L.falha)(
+        "SG de teste aceita a Lambda na porta 1433",
+        f"{', '.join(sorted(teste))} ← {', '.join(sgs_lambda)}" if entrada else
+        f"{', '.join(sorted(teste))} não tem entrada 1433 vinda do SG da Lambda {', '.join(sgs_lambda)} "
+        f"(origens por SG hoje: {', '.join(sorted(origens)) or 'nenhuma'}) — atualizar a pilha com SgTesteId")
     if prod:
         sgs_prod = [g["VpcSecurityGroupId"] for g in prod.get("VpcSecurityGroups", [])]
         abre = [sg["GroupId"] for sg in ec2.describe_security_groups(GroupIds=sgs_prod)["SecurityGroups"]
@@ -176,11 +187,11 @@ def verificar(cfg: dict, exercicio: str, ciclo: str) -> Path:
 
     # Frente C
     cb = cfg.get("conta_backup") or {}
-    siso = aws.sessao(cb["perfil"], regiao) if cb.get("perfil") else None
+    siso = aws.sessao(cb["perfil"], regiao_conta_backup(cfg)) if cb.get("perfil") else None
     if not siso:
         L.aviso("conta_backup não configurada", "Frente C indisponível neste arquivo (executada pelo Custodiante)")
     elif _tentar(L, f"Perfil da conta de backup '{cb['perfil']}'", lambda: aws.conferir_conta(siso, cb["conta_id"], "de backup isolada")):
-        L.ok(f"Perfil da conta de backup '{cb['perfil']}' na conta {cb['conta_id']}")
+        L.ok(f"Perfil da conta de backup '{cb['perfil']}' na conta {cb['conta_id']}", f"cofre isolado em {regiao_conta_backup(cfg)}")
         if prod:
             def ultimo_ponto():
                 pts = []

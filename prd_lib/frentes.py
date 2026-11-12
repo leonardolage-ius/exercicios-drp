@@ -16,7 +16,7 @@ from datetime import timedelta
 from botocore.exceptions import ClientError
 
 from . import aws, integridade, lambda_sql, tempo
-from .config import exigir_conta_backup, prefixos_do_dia
+from .config import exigir_conta_backup, prefixos_do_dia, regiao_conta_backup
 from .contexto import Abortado, Execucao
 
 
@@ -35,7 +35,7 @@ def _cli(ex: Execucao, servico: str):
 def _cli_backup_isolada(ex: Execucao):
     if "sess_iso" not in ex.rt:
         cb = exigir_conta_backup(ex.cfg)
-        ex.rt["sess_iso"] = aws.sessao(cb["perfil"], ex.cfg["regiao"])
+        ex.rt["sess_iso"] = aws.sessao(cb["perfil"], regiao_conta_backup(ex.cfg))
         aws.conferir_conta(ex.rt["sess_iso"], cb["conta_id"], "de backup isolada")
         ex.rt["cli_backup_iso"] = ex.rt["sess_iso"].client("backup")
     return ex.rt["cli_backup_iso"]
@@ -281,7 +281,7 @@ def calcular_resultado(ex: Execucao) -> dict:
         if ini:
             horas_total += max((fim - ini).total_seconds(), 0) / 3600
     res["horas_instancia"] = round(horas_total, 2)
-    res["custo_estimado_usd"] = round(horas_total * float(preco), 2) if preco else None
+    res["custo_estimado_usd"] = round(horas_total * float(str(preco).replace(",", ".")), 2) if preco else None
     res["instancias_pendentes"] = [i for i, r in e["instancias"].items() if not r.get("excluida_em")]
     sucesso = res["dentro_rto"] and res["dentro_rpo"] and res["integridade_confirmada"]
     res["resultado"] = "Bem-sucedida" if sucesso else "Falha — abrir Não Conformidade no CAL® (Ocorrências)"
@@ -771,6 +771,10 @@ def frente_c(ex: Execucao, args) -> None:
         print(f"  Ponto de recuperação no cofre isolado: {rp['RecoveryPointArn']}")
         print(f"    criado em {tempo.br(rp['CreationDate'])} — idade {tempo.duracao((tempo.agora() - tempo.para_local(rp['CreationDate'])).total_seconds())}")
         print(f"  Cofre de destino: {cofre_dest['BackupVaultArn']}")
+        if regiao_conta_backup(ex.cfg) != ex.cfg["regiao"]:
+            print(f"  Cópia entre regiões: {regiao_conta_backup(ex.cfg)} → {ex.cfg['regiao']} "
+                  "(o tempo da transferência entre regiões entra no RTO)")
+            ponto["regiao_origem"] = regiao_conta_backup(ex.cfg)
         print(f"  Executante da cópia: Custodiante da Conta de Backup ({cb.get('custodiante', 'ver PG 13/09')})")
         ex.exigir("Parâmetros conferidos. Prosseguir?")
 

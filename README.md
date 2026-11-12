@@ -44,7 +44,7 @@ cd CAL
 copy config_cal.exemplo.yaml config_cal.yaml      (Linux/macOS: cp)
 ```
 
-Preencha o `config_<sistema>.yaml`: conta, perfil, cofre primário, sub-rede e grupo de segurança de teste, chave KMS, bucket dos .bak (ou de exportação, no Onegreen), tabelas de referência da integridade e `custo_hora_usd`. A seção `conta_backup` só é necessária para a Frente C (Custodiante). Em `bak.bancos`, o `prefixo` é o caminho dos .bak dentro do bucket e aceita `{ano}`, `{mes}` e `{dia}` da data do arquivo procurado — ex.: `prefixo: "{ano}_{mes}/BACKUP_AUDIT_PORTAL_"` (entre aspas, por causa das chaves). No dia 1º, o .bak do dia anterior é procurado na pasta do mês anterior. As metas já vêm do PCN, seção 7 — confira a cada revisão do PG 13/13.
+Preencha o `config_<sistema>.yaml`: conta, perfil, cofre primário, sub-rede e grupo de segurança de teste, chave KMS, bucket dos .bak (ou de exportação, no Onegreen), tabelas de referência da integridade e `custo_hora_usd`. A seção `conta_backup` só é necessária para a Frente C (Custodiante); `conta_backup.regiao` é a região do cofre isolado (padrão: a do sistema) — no Portal, em us-east-2 com cofre isolado em us-east-1, a cópia de retorno é entre contas e entre regiões. Em `bak.bancos`, o `prefixo` é o caminho dos .bak dentro do bucket e aceita `{ano}`, `{mes}` e `{dia}` da data do arquivo procurado — ex.: `prefixo: "{ano}_{mes}/BACKUP_AUDIT_PORTAL_"` (entre aspas, por causa das chaves). No dia 1º, o .bak do dia anterior é procurado na pasta do mês anterior. As metas já vêm do PCN, seção 7 — confira a cada revisão do PG 13/13.
 
 ## Uso (exemplo do CAL®; Onegreen e Portal são iguais, na pasta de cada um)
 

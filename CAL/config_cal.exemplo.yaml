@@ -46,6 +46,7 @@ servico:
 
 # Conta de backup isolada (PG 13/09) — só para a Frente C, executada pelo Custodiante da Conta de Backup.
 conta_backup:
+  regiao: us-east-1                   # região do cofre isolado (pode ser diferente da região do sistema)
   perfil: <perfil-aws-conta-backup>
   conta_id: "<000000000000>"
   cofre: <nome-do-cofre-isolado>
