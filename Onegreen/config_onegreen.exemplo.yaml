@@ -36,8 +36,8 @@ servico:
     tabelas: [<dbo.TabelaReferencia1>, <dbo.TabelaReferencia2>, <dbo.TabelaReferencia3>]
     consulta_funcional: "SELECT TOP 10 * FROM <dbo.Tabela> ORDER BY <coluna_data> DESC;"
   metas:
-    A: {rto_min: 120, rpo_min: 5}
-    B: {rto_min: 180, rpo_min: 5}
+    A: {rto_min: 120, rpo_min: 15}
+    B: {rto_min: 180, rpo_min: 15}
     C: {rto_min: 120, rpo_min: 1440}
   custo_hora_usd: null                # preço/hora da classe usada (us-east-1), para estimar o custo
 
