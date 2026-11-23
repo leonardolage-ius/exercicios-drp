@@ -30,6 +30,9 @@ def nome_funcao(ex: Execucao) -> str | None:
 
 
 def _cliente(ex: Execucao, servico: str):
+    if "sess" not in ex.rt:  # retomada: a sessão ainda não foi criada nesta execução
+        ex.rt["sess"] = aws.sessao(ex.servico["perfil"], ex.cfg["regiao"])
+        aws.conferir_conta(ex.rt["sess"], ex.servico["conta_id"], f"do serviço ({ex.servico['nome']})")
     chave = f"cli_{servico}"
     if chave not in ex.rt:
         ex.rt[chave] = ex.rt["sess"].client(servico)
@@ -71,7 +74,12 @@ def invocar(ex: Execucao, payload: dict) -> dict:
 
 
 def hora_servidor(texto: str | None, offset_seg: float):
-    """Converte um horário do SQL Server (sem fuso, no relógio do servidor) para Brasília."""
+    """Converte um horário sem fuso do SQL Server para Brasília, dado o deslocamento do relógio em relação a UTC.
+
+    Atenção: o rds_task_status devolve created_at/last_updated em UTC mesmo quando a instância tem fuso
+    configurado (constatado em 22/11/2026 no Onegreen: servidor em UTC-3, created_at em UTC). Para esses
+    campos, use offset_seg = 0.
+    """
     if not texto:
         return None
     ingenuo = datetime.fromisoformat(texto)
@@ -133,8 +141,17 @@ def executar_tarefas(ex: Execucao, acao: str, identificador: str, tarefas: list[
             ex.salvar()
             print(f"    tarefa {r['task_id']} criada ({t['banco']}): {r['lifecycle']}")
         primeiro = estado["itens"][0]
-        inicio = hora_servidor(primeiro["created_at_servidor"], primeiro["offset_seg"]) or tempo.de_iso(primeiro["solicitado_em"])
+        inicio = hora_servidor(primeiro["created_at_servidor"], 0) or tempo.de_iso(primeiro["solicitado_em"])
         ex.marco_extra(desc_inicio, inicio)
+    else:
+        # corrige registros gravados pela versão que convertia created_at pelo fuso do servidor
+        primeiro = estado["itens"][0]
+        correto = hora_servidor(primeiro["created_at_servidor"], 0)
+        for m in ex.estado.get("marcos_extras", []):
+            if m["descricao"] == desc_inicio and correto and m["horario"] != tempo.iso(correto):
+                ex.evento("correcao", f"{desc_inicio}: {m['horario']} -> {tempo.iso(correto)} (created_at em UTC)")
+                m["horario"] = tempo.iso(correto)
+        ex.salvar()
 
     intervalo = ex.cfg["intervalo_consulta_seg"]
     limite = time.monotonic() + ex.cfg["tempo_maximo_espera_min"] * 60
@@ -169,7 +186,7 @@ def executar_tarefas(ex: Execucao, acao: str, identificador: str, tarefas: list[
             time.sleep(intervalo)
 
     ultimo_item = max(estado["itens"], key=lambda i: i.get("last_updated_servidor") or "")
-    fim = hora_servidor(ultimo_item.get("last_updated_servidor"), ultimo_item["offset_seg"])
+    fim = hora_servidor(ultimo_item.get("last_updated_servidor"), 0)
     observado = tempo.de_iso(ultimo_item["observado_em"])
     if fim is None:
         fim = observado

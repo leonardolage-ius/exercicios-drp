@@ -75,14 +75,19 @@ def _preparar_comum(ex: Execucao) -> dict:
     if not prod.get("StorageEncrypted"):
         ex.lacuna("Instância de produção sem criptografia em repouso", "alta")
     t = ex.servico["teste"]
-    rede = aws.verificar_rede_teste(ex.rt["sess"], t["db_subnet_group"], t["security_group_ids"])
+    rede = aws.verificar_rede_teste(ex.rt["sess"], t["db_subnet_group"], t["security_group_ids"],
+                                    t.get("cidrs_autorizados") or None, acesso_publico=bool(t.get("acesso_publico")))
     ex.dados["rede_teste"] = rede
     print(f"  Rede de teste: subnet group {rede['subnet_group']} (VPC {rede['vpc']}), SG {', '.join(rede['security_groups'])}")
     if rede["problemas"]:
         for p in rede["problemas"]:
             print(f"    PROBLEMA: {p}")
-        raise Abortado("A rede de teste não atende à seção 8 (sub-rede privada e sem entrada da internet). Corrija o config.")
-    print("    sub-redes privadas e sem regra de entrada a partir da internet: OK")
+        raise Abortado("A rede de teste não atende às regras de acesso configuradas. Corrija a rede ou o config.")
+    if t.get("acesso_publico"):
+        ips = ", ".join(rede["ips_entrada"]) or "nenhum IP (só grupos de segurança)"
+        print(f"    acesso público habilitado (config do sistema); entrada restrita pelo grupo de segurança de teste: {ips}")
+    else:
+        print("    sub-redes privadas e sem regra de entrada a partir da internet: OK")
     ex.salvar()
     _ = rds
     return prod
@@ -138,7 +143,7 @@ def _iniciar_pitr(ex: Execucao, prod: dict, alvo: str, papel: str, marcar_m1: bo
     classe ............ {params['DBInstanceClass']}
     subnet group ...... {params['DBSubnetGroupName']}
     SG ................ {', '.join(params['VpcSecurityGroupIds'])}
-    acesso público .... não   | Multi-AZ: não | criptografia: herdada da produção
+    acesso público .... {'sim (entrada restrita pelo SG de teste)' if params['PubliclyAccessible'] else 'não'}   | Multi-AZ: não | criptografia: herdada da produção
     grupo de opções ... {params['OptionGroupName']}""")
     ex.exigir(f"Iniciar a restauração PITR em {alvo}?")
     if marcar_m1:
@@ -191,7 +196,7 @@ def _criar_instancia_vazia(ex: Execucao, prod: dict, alvo: str, papel: str, grup
     classe ............ {req['DBInstanceClass']} | armazenamento: {req['AllocatedStorage']} GB {req['StorageType']}
     subnet group ...... {req['DBSubnetGroupName']}
     SG ................ {', '.join(req['VpcSecurityGroupIds'])}
-    acesso público .... não   | Multi-AZ: não
+    acesso público .... {'sim (entrada restrita pelo SG de teste)' if req['PubliclyAccessible'] else 'não'}   | Multi-AZ: não
     criptografia ...... sim — {req['KmsKeyId']}
     grupo de opções ... {req['OptionGroupName']} (SQLSERVER_BACKUP_RESTORE)
     senha do mestre ... gerenciada pelo Secrets Manager (não aparece no console nem no registro)""")
@@ -782,7 +787,7 @@ def frente_c(ex: Execucao, args) -> None:
         bkp_iso = _cli_backup_isolada(ex)
         req = dict(RecoveryPointArn=ex.dados["ponto_isolado"]["origem"], SourceBackupVaultName=cb["cofre"],
                    DestinationBackupVaultArn=ex.dados["cofre_destino"]["arn"], IamRoleArn=cb["papel_copia_arn"],
-                   IdempotencyToken=f"{ex.exercicio}-{ex.ciclo}-C")
+                   IdempotencyToken=f"{ex.exercicio}-{ex.ciclo}-C-{tempo.agora():%Y%m%d%H%M%S}")
         if cb.get("ciclo_vida_copia_dias"):
             req["Lifecycle"] = {"DeleteAfterDays": int(cb["ciclo_vida_copia_dias"])}
         print(f"  Cópia de retorno: {cb['cofre']} (conta {cb['conta_id']}) -> {ex.dados['cofre_destino']['nome']} (conta {ex.servico['conta_id']})")
@@ -808,9 +813,22 @@ def frente_c(ex: Execucao, args) -> None:
                 break
             if job["State"] in ("FAILED", "ABORTED"):
                 ex.dados["copia"]["falha"] = job.get("StatusMessage")
-                ex.lacuna(f"Cópia de retorno falhou: {job.get('StatusMessage')}", "critica")
+                ex.dados["copia"]["encerrada_em"] = tempo.iso(tempo.agora())
+                if not ex.dados["copia"].get("lacuna_registrada"):
+                    ex.lacuna(f"Cópia de retorno falhou: {job.get('StatusMessage')}", "critica")
+                    ex.dados["copia"]["lacuna_registrada"] = True
                 ex.salvar()
-                raise Abortado("A cópia de retorno do cofre isolado falhou — registrar Não Conformidade.")
+                print(f"\n  A cópia {job_id} falhou: {job.get('StatusMessage')}")
+                if ex.confirmar("Registrar esta tentativa e preparar uma NOVA cópia na próxima execução "
+                                "(depois de corrigir as permissões)?"):
+                    tentativa = dict(ex.dados.pop("copia"))
+                    tentativa["m1"] = ex.estado["marcos"].pop("m1", None)
+                    ex.dados.setdefault("tentativas_copia", []).append(tentativa)
+                    if "copiar" in ex.estado["passos_concluidos"]:
+                        ex.estado["passos_concluidos"].remove("copiar")
+                    ex.evento("nova_tentativa", f"Cópia {job_id} arquivada como tentativa; a próxima execução inicia nova cópia")
+                    ex.salvar()
+                raise Abortado("A cópia de retorno do cofre isolado falhou — falha registrada como lacuna crítica.")
             if _t.monotonic() > limite:
                 raise Abortado("Tempo máximo de espera da cópia excedido.")
             _t.sleep(ex.cfg["intervalo_consulta_seg"])
@@ -869,7 +887,7 @@ def frente_c(ex: Execucao, args) -> None:
         req = dict(DBInstanceIdentifier=alvo, DBSnapshotIdentifier=ex.dados["snapshot_copiado"],
                    Tags=aws.tags_exercicio(ex, alvo), **params)
         print(f"  Restore do snapshot {ex.dados['snapshot_copiado']} em {alvo} "
-              f"(subnet {params['DBSubnetGroupName']}, sem acesso público)")
+              f"(subnet {params['DBSubnetGroupName']}, acesso público: {'sim' if params['PubliclyAccessible'] else 'não'})")
         ex.exigir("Iniciar o restore do snapshot copiado?")
         ex.marco_extra("Início do restore do snapshot copiado")
         resp = rds.restore_db_instance_from_db_snapshot(**req)

@@ -26,16 +26,18 @@ def gerar_sql(pasta: Path, rotulo: str, banco: str, tabelas: list[str], consulta
     """Gera dois scripts: um para a instância restaurada (contagem exata) e um para a produção.
 
     Na produção não há varredura de tabelas: as contagens vêm dos metadados
-    (sys.dm_db_partition_stats), sem leitura das tabelas, sem bloqueio e sem carga perceptível.
+    (sys.partitions), sem leitura das tabelas, sem bloqueio e sem carga perceptível. Basta permissão de
+    leitura nas tabelas (não exige VIEW DATABASE STATE, como sys.dm_db_partition_stats).
     """
     cab = ["-- Verificação de integridade — exercício de recuperação (PG 13/03, seção 8)", ""]
     horario = ["SELECT SYSDATETIMEOFFSET() AS horario_consulta, @@SERVERNAME AS servidor, DB_NAME() AS banco;", ""]
     metadados = (
-        "SELECT OBJECT_SCHEMA_NAME(ps.object_id) + '.' + OBJECT_NAME(ps.object_id) AS tabela,\n"
-        "       SUM(ps.row_count) AS registros_metadados\n"
-        "FROM sys.dm_db_partition_stats ps\n"
-        f"WHERE ps.index_id IN (0, 1) AND ps.object_id IN ({_objetos(tabelas)})\n"
-        "GROUP BY ps.object_id;"
+        "-- Se vier vazio para alguma tabela, o usuário não tem permissão de leitura nela.\n"
+        "SELECT OBJECT_SCHEMA_NAME(p.object_id) + '.' + OBJECT_NAME(p.object_id) AS tabela,\n"
+        "       SUM(p.rows) AS registros_metadados\n"
+        "FROM sys.partitions p\n"
+        f"WHERE p.index_id IN (0, 1) AND p.object_id IN ({_objetos(tabelas)})\n"
+        "GROUP BY p.object_id;"
     ) if tabelas else "-- (definir integridade.tabelas no config)"
 
     rest = pasta / f"integridade_{rotulo}_restaurada.sql"
@@ -71,10 +73,26 @@ def gerar_planilha(caminho: Path, tabelas: list[str]) -> None:
             w.writerow([t, "", "", "", ""])
 
 
+def _abrir_planilha(caminho: Path):
+    """Aceita a planilha salva pelo Excel como CSV UTF-8, CSV comum (ANSI) ou 'Texto Unicode' (UTF-16, tabulação)."""
+    import io
+    bruto = caminho.read_bytes()
+    if bruto[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        texto = bruto.decode("utf-16")
+    else:
+        try:
+            texto = bruto.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            texto = bruto.decode("cp1252")
+    cabecalho = texto.splitlines()[0] if texto else ""
+    sep = max((";", "\t", ","), key=cabecalho.count)
+    return csv.DictReader(io.StringIO(texto, newline=""), delimiter=sep)
+
+
 def ler_planilha(caminho: Path) -> tuple[list[dict], list[str]]:
     linhas, erros = [], []
-    with caminho.open(newline="", encoding="utf-8-sig") as f:
-        for i, r in enumerate(csv.DictReader(f, delimiter=";"), start=2):
+    if True:
+        for i, r in enumerate(_abrir_planilha(caminho), start=2):
             if not (r.get("tabela") or "").strip():
                 continue
             item = {"tabela": r["tabela"].strip()}
@@ -153,7 +171,7 @@ def executar(ex: Execucao, rotulo: str, endpoint: str | None, banco: str | None 
     resultado = {
         "banco": banco,
         "arquivo_sql": [sql_rest.name, sql_prod.name],
-        "metodo_contagem": "metadados (sys.dm_db_partition_stats) nos dois lados; contagem exata só na restaurada",
+        "metodo_contagem": "metadados (sys.partitions) nos dois lados; contagem exata só na restaurada",
         "arquivo_planilha": arq_csv.name,
         "tabelas": linhas,
         "consulta_funcional": cfg_int.get("consulta_funcional"),

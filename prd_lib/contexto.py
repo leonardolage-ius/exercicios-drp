@@ -190,9 +190,13 @@ class Execucao:
     def perguntar_horario(self, pergunta: str):
         print(f"\n{pergunta}")
         print("  (Enter = agora; ou HH:MM[:SS] de hoje, horário de Brasília; ou ISO com Z para UTC, ex.: 2027-03-15T13:45:00Z)")
+        m1 = tempo.de_iso((self.estado.get("marcos", {}).get("m1") or {}).get("horario"))
         while True:
             try:
                 dt = tempo.interpretar_horario(input("  horário: "))
+                if m1 and dt < m1:
+                    print(f"  {tempo.br(dt)} é anterior ao Marco 1 ({tempo.br(m1)}). Confira (horário de Brasília) e digite de novo.")
+                    continue
                 print(f"  registrado: {tempo.br(dt)}")
                 return dt
             except ValueError as e:

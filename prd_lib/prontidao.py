@@ -129,13 +129,18 @@ def verificar(cfg: dict, exercicio: str, ciclo: str) -> Path:
         L.falha("Instância de produção", f"{s['instancia_producao']} não encontrada")
 
     t = s["teste"]
-    rede = _tentar(L, "Rede de teste", lambda: aws.verificar_rede_teste(sess, t["db_subnet_group"], t["security_group_ids"]))
+    rede = _tentar(L, "Rede de teste", lambda: aws.verificar_rede_teste(
+        sess, t["db_subnet_group"], t["security_group_ids"], t.get("cidrs_autorizados") or None, acesso_publico=bool(t.get("acesso_publico"))))
     if rede:
         if rede["problemas"]:
             for p in rede["problemas"]:
                 L.falha("Rede de teste", p)
         else:
-            L.ok("Rede de teste privada e sem entrada da internet", f"{rede['subnet_group']} / {', '.join(rede['security_groups'])}")
+            if rede.get("acesso_publico"):
+                L.ok("Rede de teste com acesso público habilitado e entrada restrita pelo SG",
+                        f"entrada por IP: {', '.join(rede['ips_entrada']) or 'nenhuma'}; sub-redes públicas: {', '.join(rede['subnets_publicas'])}")
+            else:
+                L.ok("Rede de teste privada e sem entrada da internet", f"{rede['subnet_group']} / {', '.join(rede['security_groups'])}")
 
     if t.get("lambda_sql"):
         _verificar_lambda(L, sess, t, prod if prod else None)

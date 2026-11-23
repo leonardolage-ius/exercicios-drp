@@ -28,6 +28,8 @@ servico:
     parameter_group: null
     usuario_mestre: null # null = mesmo nome da produção; senha gerenciada pelo Secrets Manager
     retencao_backup_dias: 0 # temporárias sem backup automático
+    acesso_publico: false             # true = temporárias com acesso público (mesma configuração da produção); exige sub-rede pública e SG restrito
+    cidrs_autorizados: []             # opcional: se preenchido, o script confere que o SG só libera esses IPs
     lambda_sql: null # Marco 2 automático (Frente B): nome da Lambda após implantar lambda/; null = manual (SSMS)
   bak:
     bucket: <bucket-dos-bak-portal>

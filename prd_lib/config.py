@@ -75,6 +75,10 @@ def validar(cfg: dict) -> None:
             raise ErroConfig(f"{chave}: Frente B do tipo 'bak' exige servico.bak.bucket.")
         if s["tipo_frente_b"] == "cliente" and not (s.get("exportacao") or {}).get("bucket"):
             raise ErroConfig(f"{chave}: Frente B do tipo 'cliente' exige servico.exportacao.bucket.")
+        if t.get("acesso_publico"):
+            cidrs = t.get("cidrs_autorizados") or []
+            if any(c in ("0.0.0.0/0", "::/0") for c in cidrs):
+                raise ErroConfig(f"{chave}: teste.cidrs_autorizados não pode conter 0.0.0.0/0 nem ::/0.")
 
 
 def exigir_conta_backup(cfg: dict) -> dict:

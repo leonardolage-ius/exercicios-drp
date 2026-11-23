@@ -4,7 +4,8 @@ Salvaguardas aplicadas em todo o código:
   * o perfil AWS precisa estar na conta configurada (evita operar na conta errada);
   * nenhuma operação de alteração ou exclusão aceita identificador de produção;
   * instância temporária só é excluída se tiver o prefixo configurado e a tag PRD-Exercicio;
-  * a instância temporária é criada sem acesso público, com criptografia, na sub-rede de teste
+  * a instância temporária é criada com a configuração de rede do sistema (teste.acesso_publico; padrão: sem
+    acesso público), entrada restrita pelo grupo de segurança de teste, com criptografia, na sub-rede de teste
     e sem a tag IUS-BKP-RES (fica fora da política de backup do PG 13/09).
 """
 
@@ -125,7 +126,7 @@ def parametros_restauracao(ex: Execucao, prod: dict) -> dict:
     return {
         "DBSubnetGroupName": t["db_subnet_group"],
         "VpcSecurityGroupIds": list(t["security_group_ids"]),
-        "PubliclyAccessible": False,
+        "PubliclyAccessible": bool(t.get("acesso_publico")),
         "MultiAZ": False,
         "DBInstanceClass": t.get("classe_instancia") or prod["DBInstanceClass"],
         "OptionGroupName": grupo_opcoes,
@@ -170,8 +171,9 @@ def verificar_controles(ex: Execucao, rds, inst: dict) -> dict:
         "verificado_em": tempo.iso(tempo.agora()),
     }
     problemas = []
-    if controles["acesso_publico"]:
-        problemas.append("instância com acesso público")
+    if bool(controles["acesso_publico"]) != bool(t.get("acesso_publico")):
+        problemas.append(f"acesso público = {controles['acesso_publico']}, diferente do configurado "
+                         f"(teste.acesso_publico = {bool(t.get('acesso_publico'))})")
     if not controles["criptografia"]:
         problemas.append("instância sem criptografia em repouso")
     if controles["subnet_group"] != t["db_subnet_group"]:
@@ -235,8 +237,18 @@ def excluir_temporaria(ex: Execucao, rds, identificador: str) -> None:
 
 
 # ---------------------------------------------------------------------- rede de teste
-def verificar_rede_teste(sess: boto3.Session, subnet_group: str, security_groups: list[str]) -> dict:
-    """Confere que a sub-rede de teste é privada e que os SGs não aceitam entrada da internet."""
+def verificar_rede_teste(sess: boto3.Session, subnet_group: str, security_groups: list[str],
+                         cidrs_autorizados: list[str] | None = None, acesso_publico: bool = False) -> dict:
+    """Confere a rede de teste.
+
+    Padrão (PG 13/03, seção 8): sub-redes privadas e SGs sem entrada da internet.
+    Com cidrs_autorizados (teste.acesso_publico = true): as sub-redes precisam ser públicas para a
+    instância ser alcançável, e toda entrada por IP nos SGs tem de estar dentro dos CIDRs autorizados.
+    """
+    import ipaddress
+    publico = acesso_publico or bool(cidrs_autorizados)
+    ips_entrada = []
+    redes_ok = [ipaddress.ip_network(c, strict=False) for c in (cidrs_autorizados or [])]
     rds = sess.client("rds")
     ec2 = sess.client("ec2")
     problemas = []
@@ -245,11 +257,16 @@ def verificar_rede_teste(sess: boto3.Session, subnet_group: str, security_groups
     subnets = [s["SubnetIdentifier"] for s in grupo["Subnets"]]
     tabelas = ec2.describe_route_tables(Filters=[{"Name": "vpc-id", "Values": [vpc]}])["RouteTables"]
     principal = next((t for t in tabelas if any(a.get("Main") for a in t.get("Associations", []))), None)
+    publicas = []
     for sn in subnets:
         tabela = next((t for t in tabelas if any(a.get("SubnetId") == sn for a in t.get("Associations", []))), principal)
         rotas = tabela.get("Routes", []) if tabela else []
         if any((r.get("GatewayId") or "").startswith("igw-") for r in rotas):
-            problemas.append(f"sub-rede {sn} tem rota para internet gateway (sub-rede pública)")
+            publicas.append(sn)
+            if not publico:
+                problemas.append(f"sub-rede {sn} tem rota para internet gateway (sub-rede pública)")
+    if publico and not publicas:
+        problemas.append("acesso_publico = true, mas nenhuma sub-rede do subnet group é pública: a instância não seria alcançável")
     for sg in ec2.describe_security_groups(GroupIds=list(security_groups))["SecurityGroups"]:
         if sg["VpcId"] != vpc:
             problemas.append(f"grupo de segurança {sg['GroupId']} é de outra VPC ({sg['VpcId']})")
@@ -258,7 +275,21 @@ def verificar_rede_teste(sess: boto3.Session, subnet_group: str, security_groups
             abertos += [r["CidrIpv6"] for r in regra.get("Ipv6Ranges", []) if r.get("CidrIpv6") == "::/0"]
             if abertos:
                 problemas.append(f"grupo de segurança {sg['GroupId']} aceita entrada de {', '.join(abertos)}")
-    return {"subnet_group": subnet_group, "vpc": vpc, "subnets": subnets, "security_groups": list(security_groups), "problemas": problemas}
+            ips_entrada += [r["CidrIp"] for r in regra.get("IpRanges", [])] + [r["CidrIpv6"] for r in regra.get("Ipv6Ranges", [])]
+            if publico and redes_ok:
+                fora = [r["CidrIp"] for r in regra.get("IpRanges", [])
+                        if not any(ipaddress.ip_network(r["CidrIp"], strict=False).subnet_of(n) for n in redes_ok
+                                   if n.version == 4)]
+                fora += [r["CidrIpv6"] for r in regra.get("Ipv6Ranges", [])
+                         if not any(ipaddress.ip_network(r["CidrIpv6"], strict=False).subnet_of(n) for n in redes_ok
+                                    if n.version == 6)]
+                if fora:
+                    problemas.append(f"grupo de segurança {sg['GroupId']} aceita entrada de {', '.join(fora)}, "
+                                     "fora de teste.cidrs_autorizados")
+    return {"subnet_group": subnet_group, "vpc": vpc, "subnets": subnets, "subnets_publicas": publicas,
+            "security_groups": list(security_groups), "acesso_publico": publico,
+            "cidrs_autorizados": list(cidrs_autorizados or []), "ips_entrada": sorted(set(ips_entrada)),
+            "problemas": problemas}
 
 
 def verificar_kms(sess: boto3.Session, chave: str, conta: str) -> dict:

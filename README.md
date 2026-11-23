@@ -118,14 +118,14 @@ Os scripts não executam nenhuma operação de escrita em recurso de produção.
 
 Os pontos de contato com a produção são manuais, no SSMS, e foram protegidos:
 
-- **Integridade:** o script da produção (`integridade_*_producao.sql`) lê só metadados (`sys.dm_db_partition_stats`) e não varre tabelas. O `COUNT(*)` fica apenas no script da instância restaurada. A consulta funcional vai comentada no script da produção: rode só se for leve.
+- **Integridade:** o script da produção (`integridade_*_producao.sql`) lê só metadados (`sys.partitions`, que exige apenas leitura nas tabelas) e não varre tabelas. O `COUNT(*)` fica apenas no script da instância restaurada. A consulta funcional vai comentada no script da produção: rode só se for leve.
 - **Restore e backup nativos:** os `.sql` gerados só executam se a instância estiver no ar há poucas horas (a do exercício acabou de ser criada) e, no restore, se o banco ainda não existir. Conectado à produção por engano, o comando para com erro.
 
 
 - O perfil precisa estar na conta configurada; conta diferente interrompe.
 - Nenhuma alteração ou exclusão aceita identificador de produção (`ius-mssql-cal`, `medium-onegreen-rds` e `db-portal-fornecedores` são protegidos em qualquer script, mais os `identificadores_protegidos` do arquivo). Só se altera/exclui instância com o prefixo `ius-rds-exr-` **e** a tag `PRD-Exercicio`.
 - Antes de criar qualquer recurso: a sub-rede de teste não pode ter rota para internet gateway e os SGs não podem aceitar entrada de `0.0.0.0/0` ou `::/0` (lacunas do E1 de 20/09/2026).
-- Temporárias: `PubliclyAccessible=false`, Multi-AZ desligado, criptografia (herdada no PITR/snapshot; `kms_key_id` nas criadas do zero), sem proteção contra exclusão e sem a tag `IUS-BKP-RES` (se herdada, é removida e registrada como lacuna).
+- Temporárias: acesso de rede conforme `teste.acesso_publico` (padrão: sem acesso público; com `true`, exige sub-rede pública e entrada restrita pelo grupo de segurança de teste), Multi-AZ desligado, criptografia (herdada no PITR/snapshot; `kms_key_id` nas criadas do zero), sem proteção contra exclusão e sem a tag `IUS-BKP-RES` (se herdada, é removida e registrada como lacuna).
 - Teste de imutabilidade: só tenta excluir a versão se o objeto reportar Object Lock com retenção futura; exige digitar `TESTAR IMUTABILIDADE`. A simulação IAM confere se o perfil tem `s3:DeleteObjectVersion`, para distinguir recusa por Object Lock de recusa por falta de permissão.
 - Toda criação, renomeação e exclusão pede confirmação.
 
